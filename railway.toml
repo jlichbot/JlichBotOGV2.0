@@ -2,7 +2,6 @@
 builder = "dockerfile"
 
 [deploy]
-# Runs every 5 min, Mon-Fri, 13:30-23:00 UTC (9:30 AM - 7 PM ET)
-# BTC fast markets only run during US market hours
-cronSchedule = "*/5 13-22 * * 1-5"
+# Every 5 minutes, 24/7 — crypto fast markets run around the clock
+cronSchedule = "*/5 * * * *"
 restartPolicyType = "never"
