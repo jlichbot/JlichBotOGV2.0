@@ -203,3 +203,71 @@ def _apply_patch():
         pass
 
 _apply_patch()
+
+
+# ── Patch find_best_fast_market to fix Gamma is_live_now detection ────────────
+#
+# Problem: When using Gamma fallback, markets have no is_live_now flag.
+# The original code uses max_remaining = window_seconds * 2 to detect "live"
+# markets, but this misses markets at the boundary (e.g. 52s left on a 5m market
+# is < MIN_TIME_REMAINING=60s, so it gets skipped even though it's currently open).
+#
+# Fix: Compute is_live_now from start_time (end_time - window_duration).
+# A market is live if: start_time <= now <= end_time - MIN_TIME_REMAINING
+#
+def _patched_find_best_fast_market(markets):
+    """
+    Drop-in replacement for find_best_fast_market that correctly identifies
+    live markets from Gamma data by computing start_time from end_time.
+    """
+    from datetime import datetime, timezone, timedelta
+    import fastloop_trader as ft
+
+    now = datetime.now(timezone.utc)
+    window_secs = ft._window_seconds.get(ft.WINDOW, 300)
+    candidates = []
+
+    for m in markets:
+        # Simmer path: trust is_live_now flag directly
+        if m.get("is_live_now") is not None:
+            if not m["is_live_now"]:
+                continue
+            end_time = m.get("end_time")
+            if end_time:
+                remaining = (end_time - now).total_seconds()
+                if remaining > ft.MIN_TIME_REMAINING:
+                    candidates.append((remaining, m))
+            continue
+
+        # Gamma path: compute live window from end_time
+        end_time = m.get("end_time")
+        if not end_time:
+            continue
+
+        remaining = (end_time - now).total_seconds()
+        start_time = end_time - timedelta(seconds=window_secs)
+
+        # Market is live if we're inside the window with enough time left
+        if start_time <= now and remaining > ft.MIN_TIME_REMAINING:
+            candidates.append((remaining, m))
+        elif start_time <= now and remaining > 0:
+            # Market is live but very close to expiry — log and skip
+            print(f"    Skipping {m.get('question','')[:50]}... ({remaining:.0f}s left < {ft.MIN_TIME_REMAINING}s min)", flush=True)
+
+    if not candidates:
+        return None
+
+    # Pick soonest expiring (most urgent)
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+def _apply_market_patch():
+    try:
+        import fastloop_trader
+        fastloop_trader.find_best_fast_market = _patched_find_best_fast_market
+        print("  ✅ price_fallback: live-market detection patch applied", flush=True)
+    except ImportError:
+        pass
+
+_apply_market_patch()
